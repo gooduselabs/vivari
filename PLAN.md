@@ -18,6 +18,7 @@ Người nuôi bò sát/exotic nhiều con, breeder nhỏ, trạm cứu hộ, ng
 - Màn "Hôm nay": ai đến hạn/quá hạn cho ăn, ghi nhanh 1 chạm
 - Biểu đồ cân nặng, thống kê tỉ lệ ăn
 - Xuất/nhập JSON, PWA cài lên màn hình, VI/EN
+- v2: bách khoa 24 loài, nhắc thông báo, lịch, thống kê, nhật ký ảnh (IndexedDB), nhiệt độ/độ ẩm + cảnh báo, kho mồi, chi phí, ghi nhanh nhiều con, thẻ chia sẻ PNG, giao diện tối
 
 ## Kiếm tiền
 - Miễn phí ≤3 con; **Pro trả 1 lần** (~$9.99 / 199k) không giới hạn, xuất CSV/PDF, đồng bộ mã hoá.

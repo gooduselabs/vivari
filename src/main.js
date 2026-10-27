@@ -1,84 +1,216 @@
-import './style.css';import {T} from './i18n.js';
+import './style.css';import {T} from './i18n.js';import {SPECIES} from './species.js';import * as P from './db.js';
 const K='vivari:v1',DAY=864e5;
 const EMO={reptile:'🦎',amphibian:'🐸',invert:'🕷️',bird:'🦜',fish:'🐠',mammal:'🐹'};
 const EVI={feed:'🍽️',refuse:'🙅',shed:'🐍',weight:'⚖️',clean:'🧽',water:'💧',vet:'🩺',note:'📝'};
 const HUE={reptile:150,amphibian:95,invert:265,bird:28,fish:200,mammal:330};
-let S=load(),view={tab:'today',id:null,q:'',g:'all'};
-function load(){try{return JSON.parse(localStorage[K])}catch{return{lang:'vi',animals:[],logs:[]}}}
+const blank=()=>({lang:'vi',theme:'auto',animals:[],logs:[],habitat:[],inv:[],notif:{on:false,last:''}});
+let S=load(),view={tab:'today',id:null,q:'',g:'all',wq:'',cal:null,day:null,sel:null};
+function load(){try{return{...blank(),...JSON.parse(localStorage[K])}}catch{return blank()}}
 function save(){localStorage[K]=JSON.stringify(S)}
 const t=(k,v={})=>{let s=k.split('.').reduce((o,x)=>o?.[x],T[S.lang])??k;for(const n in v)s=s.replace('{'+n+'}',v[n]);return s};
+const L=(vi,en)=>S.lang==='vi'?vi:en;
 const uid=()=>Math.random().toString(36).slice(2,10);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const d0=x=>{const d=new Date(x);d.setHours(0,0,0,0);return+d};
 const daysBetween=(a,b)=>Math.round((d0(b)-d0(a))/DAY);
+const ymd=ts=>{const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const loc=()=>S.lang==='vi'?'vi-VN':'en-GB';
+const money=n=>new Intl.NumberFormat(loc()).format(Math.round(n))+(S.lang==='vi'?' ₫':'');
 const logsOf=id=>S.logs.filter(l=>l.aid===id).sort((a,b)=>b.at-a.at);
 const last=(id,ty)=>logsOf(id).find(l=>ty.includes(l.type));
-function status(a){const f=last(a.id,['feed']);if(!f)return{left:0,f};const left=a.interval-daysBetween(f.at,Date.now());return{left,f}}
+const spOf=a=>SPECIES.find(s=>s[0]===a.sp);
+const range=a=>{const s=spOf(a);return{tmin:+a.tmin||s?.[5]||0,tmax:+a.tmax||s?.[6]||0,hmin:+a.hmin||s?.[7]||0,hmax:+a.hmax||s?.[8]||0}};
+const habOf=id=>S.habitat.filter(h=>h.aid===id).sort((a,b)=>b.at-a.at);
+function habAlert(a){const h=habOf(a.id)[0];if(!h)return null;const r=range(a),m=[];
+ if(r.tmax&&h.temp!==''&&(+h.temp<r.tmin||+h.temp>r.tmax))m.push(`🌡️ ${h.temp}°C (${r.tmin}–${r.tmax})`);
+ if(r.hmax&&h.hum!==''&&h.hum!=null&&(+h.hum<r.hmin||+h.hum>r.hmax))m.push(`💧 ${h.hum}% (${r.hmin}–${r.hmax})`);return m.length?{h,m}:null}
+function status(a){const f=last(a.id,['feed']);if(!f)return{left:0,f};return{left:a.interval-daysBetween(f.at,Date.now()),f}}
 const rel=ts=>{if(!ts)return t('never');const n=daysBetween(ts,Date.now());return n<=0?t('todayW'):t('ago',{n})};
-const fmtD=ts=>new Date(ts).toLocaleDateString(S.lang==='vi'?'vi-VN':'en-GB',{day:'2-digit',month:'short',year:'numeric'});
-const toast=m=>{const e=document.createElement('div');e.className='toast';e.textContent=m;document.body.append(e);setTimeout(()=>e.remove(),2200)};
+const fmtD=ts=>new Date(ts).toLocaleDateString(loc(),{day:'2-digit',month:'short',year:'numeric'});
+const toast=m=>{document.querySelectorAll('.toast').forEach(x=>x.remove());const e=document.createElement('div');e.className='toast';e.textContent=m;document.body.append(e);setTimeout(()=>e.remove(),2200)};
+const lowStock=()=>S.inv.filter(i=>+i.qty<=+i.min);
 const app=document.getElementById('app');
+function applyTheme(){const dark=S.theme==='dark'||(S.theme==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=dark?'dark':'light';document.querySelector('meta[name=theme-color]').content=dark?'#0b1720':'#eaf6ff'}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyTheme);
 
-function render(){document.documentElement.lang=S.lang;app.innerHTML=`<main class="wrap">${view.id?detail():view.tab==='today'?today():view.tab==='animals'?animals():settings()}</main>${tabbar()}`;app.querySelector('main').classList.add('in')}
-function tabbar(){const b=(k,i)=>`<button data-tab="${k}" class="${view.tab===k&&!view.id?'on':''}"><span>${i}</span>${t(k)}</button>`;return`<nav class="tabbar glass">${b('today','☀️')}${b('animals','🦎')}<button class="fab" data-act="add" aria-label="${t('add')}">＋</button>${b('settings','⚙️')}</nav>`}
-function avatar(a,big){return`<div class="av ${big?'big':''}" style="--h:${HUE[a.group]||150}">${EMO[a.group]||'🐾'}</div>`}
+const PAGES={today,animals,calendar,more,stats,inventory,wiki,settings};
+function render(){document.documentElement.lang=S.lang;applyTheme();app.innerHTML=`<main class="wrap">${view.id?detail():(PAGES[view.tab]||today)()}</main>${tabbar()}`;app.querySelector('main').classList.add('in');if(view.id)loadPhotos(view.id)}
+function tabbar(){const sub=['more','stats','inventory','wiki','settings'].includes(view.tab);const b=(k,i,lbl,on)=>`<button data-tab="${k}" class="${on&&!view.id?'on':''}"><span>${i}</span>${lbl}</button>`;
+ return`<nav class="tabbar glass">${b('today','☀️',t('today'),view.tab==='today')}${b('animals','🦎',t('animals'),view.tab==='animals')}<button class="fab" data-act="add" aria-label="${t('add')}">＋</button>${b('calendar','🗓️',L('Lịch','Calendar'),view.tab==='calendar')}${b('more','✦',L('Thêm','More'),sub)}</nav>`}
+function avatar(a,big){return`<div class="av ${big?'big':''}" style="--h:${HUE[a.group]||150}">${a.cover?`<img src="${a.cover}" alt="">`:EMO[a.group]||'🐾'}</div>`}
+const head=(h,sub='')=>`<header class="hero sm">${['stats','inventory','wiki','settings'].includes(view.tab)&&!view.id?`<button class="back" data-tab="more">‹ ${L('Thêm','More')}</button>`:''}<h1>${h}<em>.</em></h1>${sub?`<p class="sub">${sub}</p>`:''}</header>`;
+
 function today(){const h=new Date().getHours(),part=h<11?'morning':h<18?'afternoon':'evening';
- const list=S.animals.map(a=>({a,...status(a)})).sort((x,y)=>x.left-y.left);const due=list.filter(x=>x.left<=0),up=list.filter(x=>x.left>0).slice(0,6);
- const rate=(()=>{const f=S.logs.filter(l=>l.type==='feed').length,r=S.logs.filter(l=>l.type==='refuse').length;return f+r?Math.round(f*100/(f+r)):0})();
- return`<header class="hero"><p class="eyebrow">${new Date().toLocaleDateString(S.lang==='vi'?'vi-VN':'en-GB',{weekday:'long',day:'numeric',month:'long'})}</p><h1>${t('hello')} ${t(part)}<em>.</em></h1><p class="sub">${t('stats',{a:S.animals.length,d:due.length})}</p></header>
+ const list=S.animals.map(a=>({a,...status(a)})).sort((x,y)=>x.left-y.left);const due=list.filter(x=>x.left<=0),up=list.filter(x=>x.left>0).slice(0,8);
+ const f=S.logs.filter(l=>l.type==='feed').length,r=S.logs.filter(l=>l.type==='refuse').length,rate=f+r?Math.round(f*100/(f+r)):0;
+ const alerts=S.animals.map(a=>({a,x:habAlert(a)})).filter(o=>o.x),low=lowStock();
+ return`<header class="hero"><p class="eyebrow">${new Date().toLocaleDateString(loc(),{weekday:'long',day:'numeric',month:'long'})}</p><h1>${t('hello')} ${t(part)}<em>.</em></h1><p class="sub">${t('stats',{a:S.animals.length,d:due.length})}</p></header>
  ${S.animals.length?`<section class="kpis"><div class="glass kpi"><b>${S.animals.length}</b><span>${t('animals')}</span></div><div class="glass kpi warn"><b>${due.length}</b><span>${t('due')}</span></div><div class="glass kpi ok"><b>${rate}%</b><span>${t('acceptance')}</span></div></section>
- <h2>${t('due')}</h2>${due.length?due.map(x=>dueCard(x)).join(''):`<div class="glass empty">🌿 ${t('allgood')}</div>`}
+ ${!S.notif.on&&'Notification'in window?`<button class="glass banner" data-act="notif"><span>🔔</span><div class="grow"><b>${L('Bật nhắc cho ăn','Turn on feeding reminders')}</b><small>${L('Nhận thông báo khi có bé đến hạn','Get notified when someone is due')}</small></div><i>›</i></button>`:''}
+ ${alerts.map(({a,x})=>`<article class="glass alert" data-open="${a.id}"><span>⚠️</span><div class="grow"><b>${esc(a.name)} · ${L('Môi trường lệch chuẩn','Habitat out of range')}</b><small>${x.m.join(' · ')}</small></div></article>`).join('')}
+ ${low.length?`<article class="glass alert amber" data-tab="inventory"><span>📦</span><div class="grow"><b>${L('Sắp hết đồ','Running low')}</b><small>${low.map(i=>esc(i.name)+' ('+i.qty+')').join(' · ')}</small></div><i>›</i></article>`:''}
+ <div class="h2row"><h2>${t('due')}</h2>${due.length>1?`<button class="btn sm" data-act="feedall">🍽️ ${L('Cho ăn tất cả','Feed all')} (${due.length})</button>`:''}</div>
+ ${due.length?due.map(x=>dueCard(x)).join(''):`<div class="glass empty">🌿 ${t('allgood')}</div>`}
  ${up.length?`<h2>${t('upcoming')}</h2><div class="chips">${up.map(x=>`<button class="glass up" data-open="${x.a.id}">${avatar(x.a)}<div><b>${esc(x.a.name)}</b><small>${t('inDays',{n:x.left})}</small></div></button>`).join('')}</div>`:''}`:emptyState()}`}
 function dueCard({a,left,f}){return`<article class="glass row due" data-open="${a.id}">${avatar(a)}<div class="grow"><b>${esc(a.name)}</b><small>${esc(a.species)} · ${t('lastFed')}: ${rel(f?.at)}</small>${left<0?`<span class="pill red">${t('overdue')} ${-left} ${t('days')}</span>`:''}</div><div class="qa"><button class="btn sm ghost" data-quick="refuse" data-id="${a.id}" title="${t('refused')}">🙅</button><button class="btn sm" data-quick="feed" data-id="${a.id}">🍽️ ${t('fed')}</button></div></article>`}
-function emptyState(){return`<div class="glass empty big"><div class="blob">🦎🐸🦜</div><p>${t('noAnimals')}</p><div class="hstack"><button class="btn" data-act="add">＋ ${t('add')}</button><button class="btn ghost" data-act="demo">${t('demo')}</button></div></div>`}
-function animals(){const q=view.q.toLowerCase();const L=S.animals.filter(a=>(view.g==='all'||a.group===view.g)&&(a.name+' '+a.species).toLowerCase().includes(q));
- return`<header class="hero sm"><h1>${t('animals')}<em>.</em></h1></header><div class="glass search"><span>🔎</span><input id="q" value="${esc(view.q)}" placeholder="${t('search')}"></div>
+function emptyState(){return`<div class="glass empty big"><div class="blob">🦎🐸🦜</div><p>${t('noAnimals')}</p><div class="hstack"><button class="btn" data-act="add">＋ ${t('add')}</button><button class="btn ghost" data-act="demo">${t('demo')}</button><button class="btn ghost" data-tab="wiki">📚 ${L('Bách khoa loài','Species guide')}</button></div></div>`}
+
+function animals(){const q=view.q.toLowerCase();const Ls=S.animals.filter(a=>(view.g==='all'||a.group===view.g)&&(a.name+' '+a.species).toLowerCase().includes(q));const sel=view.sel;
+ return`<header class="hero sm"><div class="h2row"><h1>${t('animals')}<em>.</em></h1>${S.animals.length?`<button class="btn sm ghost" data-act="selmode">${sel?L('Xong','Done'):L('Chọn nhiều','Select')}</button>`:''}</div></header><div class="glass search"><span>🔎</span><input id="q" value="${esc(view.q)}" placeholder="${t('search')}"></div>
  <div class="seg">${['all',...Object.keys(EMO)].map(g=>`<button data-g="${g}" class="${view.g===g?'on':''}">${g==='all'?t('all'):EMO[g]+' '+t('groups.'+g)}</button>`).join('')}</div>
- ${S.animals.length?`<div class="grid">${L.map(a=>{const s=status(a),w=last(a.id,['weight']);return`<article class="glass card" data-open="${a.id}" style="--h:${HUE[a.group]}">${avatar(a,1)}<b>${esc(a.name)}</b><small>${esc(a.species)}</small><div class="meta"><span class="pill ${s.left<=0?'red':'green'}">${s.left<=0?t('due'):t('inDays',{n:s.left})}</span>${w?`<span class="pill">${w.value} g</span>`:''}</div></article>`}).join('')}</div>`:emptyState()}`}
-function chart(ws){if(ws.length<2)return'';const W=320,H=110,p=10,xs=ws.map(l=>l.at),ys=ws.map(l=>+l.value);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
- const X=v=>p+(W-2*p)*(v-x0)/((x1-x0)||1),Y=v=>H-p-(H-2*p)*(v-y0)/((y1-y0)||1);const pts=ws.map(l=>[X(l.at),Y(+l.value)]);const d=pts.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+' '+q[1].toFixed(1)).join(' ');
- return`<svg viewBox="0 0 ${W} ${H}" class="chart"><defs><linearGradient id="cg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#22c55e" stop-opacity=".35"/><stop offset="1" stop-color="#22c55e" stop-opacity="0"/></linearGradient></defs><path d="${d} L${pts.at(-1)[0]} ${H} L${pts[0][0]} ${H}Z" fill="url(#cg)"/><path d="${d}" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${pts.map(q=>`<circle cx="${q[0]}" cy="${q[1]}" r="3.5" fill="#fff" stroke="#16a34a" stroke-width="2"/>`).join('')}</svg><div class="axis"><span>${y0} g</span><span>${y1} g</span></div>`}
-function detail(){const a=S.animals.find(x=>x.id===view.id);if(!a){view.id=null;return today()}const L=logsOf(a.id),s=status(a),sh=last(a.id,['shed']),ws=L.filter(l=>l.type==='weight').reverse();
- const f=L.filter(l=>l.type==='feed').length,r=L.filter(l=>l.type==='refuse').length;
- return`<button class="back" data-act="back">‹ ${t('back')}</button><header class="glass profile" style="--h:${HUE[a.group]}">${avatar(a,1)}<div><h1>${esc(a.name)}</h1><p>${esc(a.species)} · ${t('groups.'+a.group)}</p></div><button class="btn sm ghost" data-act="edit">${t('edit')}</button></header>
- <section class="kpis"><div class="glass kpi ${s.left<=0?'warn':'ok'}"><b>${s.left<=0?(s.left<0?'+'+(-s.left):'0'):s.left}</b><span>${s.left<=0?t('overdue')+' ('+t('days')+')':t('interval').split('(')[0].trim()==='Feed every'?'days to feed':'ngày tới bữa'}</span></div><div class="glass kpi"><b>${ws.at(-1)?.value??'–'}</b><span>${t('weight')} (g)</span></div><div class="glass kpi"><b>${f+r?Math.round(f*100/(f+r))+'%':'–'}</b><span>${t('acceptance')}</span></div></section>
- <div class="glass facts"><div><small>${t('lastFed')}</small><b>${rel(s.f?.at)}</b></div><div><small>${t('lastShed')}</small><b>${rel(sh?.at)}</b></div><div><small>${t('interval')}</small><b>${a.interval}</b></div></div>
- ${ws.length>1?`<div class="glass pad"><h3>${t('weight')}</h3>${chart(ws)}</div>`:''}
- <div class="quick">${Object.keys(EVI).map(k=>`<button class="glass qbtn" data-log="${k}"><span>${EVI[k]}</span>${t('ev.'+k)}</button>`).join('')}</div>
+ ${S.animals.length?`<div class="grid">${Ls.map(a=>{const s=status(a),w=last(a.id,['weight']),on=sel?.includes(a.id);return`<article class="glass card ${on?'picked':''}" ${sel?`data-pick="${a.id}"`:`data-open="${a.id}"`} style="--h:${HUE[a.group]}">${sel?`<span class="tick">${on?'✓':''}</span>`:''}${avatar(a,1)}<b>${esc(a.name)}</b><small>${esc(a.species)}</small><div class="meta"><span class="pill ${s.left<=0?'red':'green'}">${s.left<=0?t('due'):t('inDays',{n:s.left})}</span>${w?`<span class="pill">${w.value} g</span>`:''}${habAlert(a)?'<span class="pill red">⚠️</span>':''}</div></article>`}).join('')}</div>
+ ${sel?`<div class="bulk glass"><b>${sel.length} ${L('đã chọn','selected')}</b><div class="hstack">${['feed','clean','water','weight'].filter(k=>k!=='weight').map(k=>`<button class="btn sm ${k==='feed'?'':'ghost'}" data-bulk="${k}" ${sel.length?'':'disabled'}>${EVI[k]} ${t('ev.'+k)}</button>`).join('')}</div></div>`:''}`:emptyState()}`}
+
+function lineChart(pts0,unit,color='#16a34a',band){if(pts0.length<2)return`<p class="muted">${L('Cần ít nhất 2 lần ghi để vẽ biểu đồ','Log at least 2 entries to see a chart')}</p>`;const W=320,H=110,p=10,xs=pts0.map(q=>q[0]),ys=pts0.map(q=>q[1]).concat(band?[band[0],band[1]]:[]);
+ const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);const X=v=>p+(W-2*p)*(v-x0)/((x1-x0)||1),Y=v=>H-p-(H-2*p)*(v-y0)/((y1-y0)||1);const pts=pts0.map(q=>[X(q[0]),Y(q[1])]);const d=pts.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+' '+q[1].toFixed(1)).join(' ');const gid='g'+uid();
+ return`<svg viewBox="0 0 ${W} ${H}" class="chart">${band?`<rect x="0" width="${W}" y="${Y(band[1])}" height="${Y(band[0])-Y(band[1])}" fill="${color}" opacity=".08" rx="6"/>`:''}<defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${pts.at(-1)[0]} ${H} L${pts[0][0]} ${H}Z" fill="url(#${gid})"/><path d="${d}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${pts.map(q=>`<circle cx="${q[0]}" cy="${q[1]}" r="3.5" fill="var(--card)" stroke="${color}" stroke-width="2"/>`).join('')}</svg><div class="axis"><span>${Math.min(...pts0.map(q=>q[1]))}${unit}</span><span>${Math.max(...pts0.map(q=>q[1]))}${unit}</span></div>`}
+function detail(){const a=S.animals.find(x=>x.id===view.id);if(!a){view.id=null;return today()}const Ls=logsOf(a.id),s=status(a),sh=last(a.id,['shed']),ws=Ls.filter(l=>l.type==='weight').reverse();
+ const f=Ls.filter(l=>l.type==='feed').length,r=Ls.filter(l=>l.type==='refuse').length,hb=habOf(a.id),rg=range(a),al=habAlert(a),sp=spOf(a);
+ const cost=Ls.reduce((n,l)=>n+(+l.cost||0),0);
+ return`<button class="back" data-act="back">‹ ${t('back')}</button><header class="glass profile" style="--h:${HUE[a.group]}">${avatar(a,1)}<div><h1>${esc(a.name)}</h1><p>${esc(a.species)} · ${t('groups.'+a.group)}</p></div><div class="vstack"><button class="btn sm ghost" data-act="edit">${t('edit')}</button><button class="btn sm ghost" data-act="share">↗︎ ${L('Thẻ','Card')}</button></div></header>
+ <section class="kpis"><div class="glass kpi ${s.left<=0?'warn':'ok'}"><b>${s.left<=0?(s.left<0?'+'+(-s.left):'0'):s.left}</b><span>${s.left<=0?t('overdue')+' ('+t('days')+')':L('ngày tới bữa','days to feed')}</span></div><div class="glass kpi"><b>${ws.at(-1)?.value??'–'}</b><span>${t('weight')} (g)</span></div><div class="glass kpi"><b>${f+r?Math.round(f*100/(f+r))+'%':'–'}</b><span>${t('acceptance')}</span></div></section>
+ <div class="glass facts"><div><small>${t('lastFed')}</small><b>${rel(s.f?.at)}</b></div><div><small>${t('lastShed')}</small><b>${rel(sh?.at)}</b></div><div><small>${L('Chi phí','Spent')}</small><b>${money(cost)}</b></div></div>
+ <div class="quick">${Object.keys(EVI).map(k=>`<button class="glass qbtn" data-log="${k}"><span>${EVI[k]}</span>${t('ev.'+k)}</button>`).join('')}<button class="glass qbtn" data-act="hab"><span>🌡️</span>${L('Môi trường','Habitat')}</button><label class="glass qbtn"><span>📷</span>${L('Ảnh','Photo')}<input type="file" accept="image/*" id="photoIn" hidden multiple></label></div>
+ ${ws.length>1?`<div class="glass pad"><h3>${t('weight')}</h3>${lineChart(ws.map(l=>[l.at,+l.value]),' g')}</div>`:''}
+ <div class="glass pad ${al?'bad':''}"><div class="h2row"><h3>🌡️ ${L('Môi trường sống','Habitat')}</h3>${rg.tmax?`<span class="pill">${rg.tmin}–${rg.tmax}°C${rg.hmax?` · ${rg.hmin}–${rg.hmax}%`:''}</span>`:''}</div>
+  ${hb.length?`<p class="big2">${hb[0].temp!==''?hb[0].temp+'°C':''} ${hb[0].hum!==''&&hb[0].hum!=null?'· '+hb[0].hum+'%':''} <small>${rel(hb[0].at)}</small></p>${al?`<p class="warnTxt">⚠️ ${al.m.join(' · ')}</p>`:''}${lineChart(hb.filter(h=>h.temp!=='').reverse().map(h=>[h.at,+h.temp]),'°C','#0ea5e9',rg.tmax?[rg.tmin,rg.tmax]:null)}`:`<p class="muted">${L('Chưa có số đo. Bấm 🌡️ để ghi nhiệt độ / độ ẩm.','No readings yet. Tap 🌡️ to log temperature / humidity.')}</p>`}</div>
+ ${sp?`<div class="glass pad"><h3>📚 ${L('Hướng dẫn nhanh','Care sheet')}</h3><p class="muted">${esc(L(sp[10],sp[11]))} · ${L('Tuổi thọ','Lifespan')} ${sp[9]} ${L('năm','yrs')}<br>💡 ${esc(L(sp[12],sp[13]))}</p></div>`:''}
+ <h2>${L('Nhật ký ảnh','Photo diary')}</h2><div class="photos" id="photos"><p class="muted">…</p></div>
  ${a.notes?`<div class="glass pad note">${esc(a.notes)}</div>`:''}
- <h2>${t('history')}</h2><ol class="timeline">${L.length?L.map(l=>`<li class="glass"><span class="ti">${EVI[l.type]}</span><div class="grow"><b>${t('ev.'+l.type)}${l.value?` · ${esc(l.value)}${l.type==='weight'?' g':''}`:''}</b><small>${fmtD(l.at)}${l.note?' · '+esc(l.note):''}</small></div><button class="x" data-dellog="${l.id}" aria-label="${t('del')}">×</button></li>`).join(''):`<li class="glass empty">${t('noLogs')}</li>`}</ol>`}
-function settings(){return`<header class="hero sm"><h1>${t('settings')}<em>.</em></h1></header>
- <div class="glass pad list"><div class="li"><span>🌐 ${t('lang')}</span><div class="seg mini"><button data-lang="vi" class="${S.lang==='vi'?'on':''}">Tiếng Việt</button><button data-lang="en" class="${S.lang==='en'?'on':''}">English</button></div></div>
- <button class="li" data-act="export"><span>⬇️ ${t('export')}</span><i>›</i></button><label class="li"><span>⬆️ ${t('import')}</span><i>›</i><input type="file" accept="application/json" id="imp" hidden></label>
+ <h2>${t('history')}</h2><ol class="timeline">${Ls.length?Ls.map(l=>`<li class="glass"><span class="ti">${EVI[l.type]}</span><div class="grow"><b>${t('ev.'+l.type)}${l.value?` · ${esc(l.value)}${l.type==='weight'?' g':''}`:''}${+l.cost?` · ${money(l.cost)}`:''}</b><small>${fmtD(l.at)}${l.note?' · '+esc(l.note):''}</small></div><button class="x" data-dellog="${l.id}" aria-label="${t('del')}">×</button></li>`).join(''):`<li class="glass empty">${t('noLogs')}</li>`}</ol>`}
+async function loadPhotos(aid){const el=document.getElementById('photos');if(!el)return;let ps=[];try{ps=(await P.photosOf(aid)).sort((a,b)=>b.at-a.at)}catch{}
+ if(view.id!==aid)return;el.innerHTML=ps.length?ps.map(p=>`<figure class="ph"><img src="${URL.createObjectURL(p.blob)}" alt=""><figcaption>${fmtD(p.at)}</figcaption><button class="x" data-delphoto="${p.id}">×</button><button class="star" data-cover="${p.id}" title="${L('Làm ảnh đại diện','Set as avatar')}">★</button></figure>`).join(''):`<p class="muted">${L('Chưa có ảnh. Bấm 📷 để thêm — ảnh được nén và lưu trên máy.','No photos yet. Tap 📷 — photos are compressed and kept on this device.')}</p>`}
+
+function calendar(){const now=new Date(),c=view.cal||[now.getFullYear(),now.getMonth()];const [Y,M]=c;const first=new Date(Y,M,1),start=(first.getDay()+6)%7,dim=new Date(Y,M+1,0).getDate();
+ const ev={};const add=(k,x)=>(ev[k]=ev[k]||[]).push(x);S.logs.forEach(l=>{const d=new Date(l.at);if(d.getFullYear()===Y&&d.getMonth()===M)add(ymd(l.at),{l})});
+ S.animals.forEach(a=>{const f=last(a.id,['feed']);let n=f?d0(f.at)+a.interval*DAY:d0(Date.now());for(let i=0;i<40&&n<+new Date(Y,M+1,1);i++,n+=a.interval*DAY){if(n>=d0(Date.now())&&n>=+first)add(ymd(n),{due:a})}});
+ const cells=[];for(let i=0;i<start;i++)cells.push('<div></div>');for(let d=1;d<=dim;d++){const k=ymd(new Date(Y,M,d)),e=ev[k]||[],isT=k===ymd(Date.now());const types=[...new Set(e.map(x=>x.l?x.l.type:'due'))].slice(0,4);
+  cells.push(`<button class="cd ${isT?'td':''} ${view.day===k?'on':''}" data-day="${k}"><span>${d}</span><i>${types.map(ty=>`<em class="dot ${ty}"></em>`).join('')}</i></button>`)}
+ const sel=view.day&&ev[view.day]||[];const wd=S.lang==='vi'?['T2','T3','T4','T5','T6','T7','CN']:['Mo','Tu','We','Th','Fr','Sa','Su'];
+ return`${head(L('Lịch','Calendar'))}<div class="glass pad cal"><div class="h2row"><button class="btn sm ghost" data-mon="-1">‹</button><b class="mon">${first.toLocaleDateString(loc(),{month:'long',year:'numeric'})}</b><button class="btn sm ghost" data-mon="1">›</button></div><div class="wk">${wd.map(w=>`<span>${w}</span>`).join('')}</div><div class="cg">${cells.join('')}</div>
+ <div class="legend"><span><em class="dot feed"></em>${t('ev.feed')}</span><span><em class="dot due"></em>${L('Dự kiến cho ăn','Planned feeding')}</span><span><em class="dot shed"></em>${t('ev.shed')}</span><span><em class="dot vet"></em>${t('ev.vet')}</span></div></div>
+ ${view.day?`<h2>${new Date(view.day+'T12:00').toLocaleDateString(loc(),{weekday:'long',day:'numeric',month:'long'})}</h2><ol class="timeline">${sel.length?sel.map(x=>{const a=S.animals.find(z=>z.id===(x.l?x.l.aid:x.due.id));if(!a)return'';return`<li class="glass" data-open="${a.id}">${avatar(a)}<div class="grow"><b>${esc(a.name)}</b><small>${x.l?EVI[x.l.type]+' '+t('ev.'+x.l.type)+(x.l.value?' · '+esc(x.l.value):''):'🗓️ '+L('Dự kiến cho ăn','Planned feeding')}</small></div></li>`}).join(''):`<li class="glass empty">${t('noLogs')}</li>`}</ol>`:''}`}
+
+function more(){const it=(tab,i,a,b,sub)=>`<button class="glass tile" data-tab="${tab}"><span>${i}</span><b>${a}</b><small>${sub}</small></button>`;const low=lowStock().length;
+ return`${head(L('Thêm','More'))}<div class="tiles">${it('stats','📊',L('Thống kê','Statistics'),'',L('Ăn uống, lột xác, chi phí','Feeding, sheds, spending'))}${it('inventory','📦',L('Kho đồ','Supplies'),'',low?`⚠️ ${low} ${L('sắp hết','running low')}`:`${S.inv.length} ${L('mặt hàng','items')}`)}${it('wiki','📚',L('Bách khoa loài','Species guide'),'',`${SPECIES.length} ${L('loài','species')}`)}${it('settings','⚙️',t('settings'),'',L('Ngôn ngữ, giao diện, sao lưu','Language, theme, backup'))}</div>`}
+
+function stats(){const now=Date.now(),days=30;const fs=S.logs.filter(l=>(l.type==='feed'||l.type==='refuse')&&now-l.at<days*DAY);const by=Array.from({length:days},(_,i)=>{const k=ymd(now-(days-1-i)*DAY);return{k,f:fs.filter(l=>l.type==='feed'&&ymd(l.at)===k).length,r:fs.filter(l=>l.type==='refuse'&&ymd(l.at)===k).length}});const mx=Math.max(1,...by.map(b=>b.f+b.r));
+ const per=S.animals.map(a=>{const Ls=logsOf(a.id),f=Ls.filter(l=>l.type==='feed').length,r=Ls.filter(l=>l.type==='refuse').length,sh=Ls.filter(l=>l.type==='shed').map(l=>l.at).sort();const gaps=sh.slice(1).map((x,i)=>daysBetween(sh[i],x));return{a,rate:f+r?Math.round(f*100/(f+r)):null,shed:gaps.length?Math.round(gaps.reduce((p,c)=>p+c,0)/gaps.length):null,ns:sh.length,cost:Ls.reduce((n,l)=>n+(+l.cost||0),0)}});
+ const tot=per.reduce((n,p)=>n+p.cost,0),inv=S.inv.reduce((n,i)=>n+(+i.cost||0),0);const mo=S.logs.filter(l=>new Date(l.at).getMonth()===new Date().getMonth()&&new Date(l.at).getFullYear()===new Date().getFullYear()).reduce((n,l)=>n+(+l.cost||0),0);
+ const cat={};S.logs.forEach(l=>{if(+l.cost)cat[l.type]=(cat[l.type]||0)+ +l.cost});const cmax=Math.max(1,...Object.values(cat));
+ return`${head(L('Thống kê','Statistics'),L('30 ngày gần nhất','Last 30 days'))}
+ <section class="kpis"><div class="glass kpi"><b>${fs.filter(l=>l.type==='feed').length}</b><span>${L('Bữa ăn','Meals')}</span></div><div class="glass kpi warn"><b>${fs.filter(l=>l.type==='refuse').length}</b><span>${t('refused')}</span></div><div class="glass kpi ok"><b class="sm">${money(mo)}</b><span>${L('Chi tháng này','This month')}</span></div></section>
+ <div class="glass pad"><h3>🍽️ ${L('Cho ăn mỗi ngày','Daily feedings')}</h3><div class="bars">${by.map(b=>`<div title="${b.k}: ${b.f}/${b.r}"><i class="r" style="height:${b.r/mx*100}%"></i><i style="height:${b.f/mx*100}%"></i></div>`).join('')}</div><div class="axis"><span>-30d</span><span>${t('todayW')}</span></div></div>
+ <h2>${L('Theo từng bé','Per animal')}</h2><div class="glass pad list">${per.length?per.map(p=>`<div class="srow">${avatar(p.a)}<div class="grow"><b>${esc(p.a.name)}</b><div class="meter"><i style="width:${p.rate??0}%"></i></div><small>${t('acceptance')}: ${p.rate??'–'}% · ${L('Chu kỳ lột','Shed cycle')}: ${p.shed?p.shed+' '+t('days'):'–'} · ${money(p.cost)}</small></div></div>`).join(''):`<p class="muted">${t('noAnimals')}</p>`}</div>
+ <h2>${L('Chi phí','Spending')}</h2><div class="glass pad">${Object.keys(cat).length?Object.entries(cat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="crow"><span>${EVI[k]} ${t('ev.'+k)}</span><div class="meter blue"><i style="width:${v/cmax*100}%"></i></div><b>${money(v)}</b></div>`).join(''):`<p class="muted">${L('Thêm "chi phí" khi ghi nhật ký (vd. thú y, thức ăn) để thấy ở đây.','Add a cost when logging (e.g. vet, food) to see it here.')}</p>`}<p class="tot">${L('Tổng nhật ký','Logged total')}: <b>${money(tot)}</b> · ${L('Kho đồ','Supplies')}: <b>${money(inv)}</b></p></div>`}
+
+function inventory(){return`${head(L('Kho đồ','Supplies'),L('Mồi sống, thức ăn, chất nền, thuốc…','Feeders, food, substrate, meds…'))}<button class="btn wide" data-act="addinv">＋ ${L('Thêm mặt hàng','Add item')}</button>
+ <div class="invlist">${S.inv.length?S.inv.map(i=>{const low=+i.qty<=+i.min;return`<article class="glass row inv ${low?'lowc':''}"><div class="ti big">${i.emoji||'📦'}</div><div class="grow"><b>${esc(i.name)}</b><small>${low?`<span class="pill red">${L('Sắp hết','Low')}</span> `:''}${L('Báo khi ≤','Alert at ≤')} ${i.min} ${esc(i.unit)}${+i.cost?' · '+money(i.cost):''}</small></div><div class="stepper"><button data-inv="-1" data-id="${i.id}">−</button><b>${i.qty}</b><button data-inv="1" data-id="${i.id}">＋</button></div><button class="x" data-editinv="${i.id}">⋯</button></article>`}).join(''):`<div class="glass empty">📦 ${L('Chưa có gì. Thêm mồi/thức ăn — mỗi lần "Đã cho ăn" sẽ tự trừ kho nếu bạn gắn mồi cho bé.','Nothing yet. Add feeders — each "Fed" auto-deducts if linked to an animal.')}</div>`}</div>`}
+
+function wiki(){const q=view.wq.toLowerCase();const Ls=SPECIES.filter(s=>(s[1]+' '+s[2]).toLowerCase().includes(q)&&(view.g==='all'||s[3]===view.g));
+ return`${head(L('Bách khoa loài','Species guide'),L('Thông số chăm sóc cơ bản — tham khảo, không thay thú y.','Basic care ranges — guidance, not a vet.'))}<div class="glass search"><span>🔎</span><input id="wq" value="${esc(view.wq)}" placeholder="${L('Tìm loài…','Search species…')}"></div>
+ <div class="seg">${['all',...Object.keys(EMO)].map(g=>`<button data-g="${g}" class="${view.g===g?'on':''}">${g==='all'?t('all'):EMO[g]+' '+t('groups.'+g)}</button>`).join('')}</div>
+ <div class="wgrid">${Ls.map(s=>`<article class="glass sp" style="--h:${HUE[s[3]]}"><div class="h2row"><div class="av" style="--h:${HUE[s[3]]}">${EMO[s[3]]}</div><div class="grow"><b>${esc(L(s[1],s[2]))}</b><small>${t('groups.'+s[3])} · ${L('Tuổi thọ','Lifespan')} ${s[9]} ${L('năm','yrs')}</small></div></div>
+ <div class="specs"><span>🌡️ ${s[5]}–${s[6]}°C</span>${s[8]?`<span>💧 ${s[7]}–${s[8]}%</span>`:''}<span>🍽️ ${s[4]===1?L('hằng ngày','daily'):L(`mỗi ${s[4]} ngày`,`every ${s[4]} d`)}</span></div><p class="muted">${esc(L(s[10],s[11]))}</p><p class="tip">💡 ${esc(L(s[12],s[13]))}</p><button class="btn sm ghost" data-adopt="${s[0]}">＋ ${L('Thêm bé loài này','Add this species')}</button></article>`).join('')}</div>`}
+
+function settings(){const seg=(k,opts)=>`<div class="seg mini">${opts.map(([v,l])=>`<button data-set="${k}" data-v="${v}" class="${S[k]===v?'on':''}">${l}</button>`).join('')}</div>`;
+ return`${head(t('settings'))}<div class="glass pad list"><div class="li"><span>🌐 ${t('lang')}</span>${seg('lang',[['vi','Tiếng Việt'],['en','English']])}</div>
+ <div class="li"><span>🌓 ${L('Giao diện','Theme')}</span>${seg('theme',[['auto',L('Tự động','Auto')],['light',L('Sáng','Light')],['dark',L('Tối','Dark')]])}</div>
+ <button class="li" data-act="notif"><span>🔔 ${L('Nhắc cho ăn','Feeding reminders')}</span><i>${S.notif.on?L('Đang bật','On'):L('Tắt','Off')} ›</i></button>
+ ${S.notif.on?`<button class="li" data-act="testnotif"><span>🧪 ${L('Gửi thông báo thử','Send test notification')}</span><i>›</i></button>`:''}
+ <button class="li" data-act="export"><span>⬇️ ${t('export')} ${L('(kèm ảnh)','(with photos)')}</span><i>›</i></button><label class="li"><span>⬆️ ${t('import')}</span><i>›</i><input type="file" accept="application/json,.json" id="imp" hidden></label>
  <button class="li" data-act="demo"><span>✨ ${t('demo')}</span><i>›</i></button><button class="li danger" data-act="wipe"><span>🗑️ ${t('wipe')}</span><i>›</i></button></div>
  <p class="foot">🔒 ${t('privacy')}<br>Vivari · GoodUseLabs</p>`}
 
-function sheet(html,onSubmit){const m=document.createElement('div');m.className='modal';m.innerHTML=`<form class="sheet glass">${html}<div class="hstack end"><button type="button" class="btn ghost" data-close>${t('cancel')}</button><button class="btn">${t('save')}</button></div></form>`;document.body.append(m);requestAnimationFrame(()=>m.classList.add('show'));
- const close=()=>{m.classList.remove('show');setTimeout(()=>m.remove(),250)};m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)close()};m.querySelector('form').onsubmit=e=>{e.preventDefault();onSubmit(Object.fromEntries(new FormData(e.target)));close();save();render()};m.querySelector('input,select')?.focus()}
-function animalForm(a){const e=a||{name:'',species:'',group:'reptile',interval:7,notes:''};
- sheet(`<h3>${a?t('edit'):t('add')}</h3><label>${t('name')}<input name="name" required value="${esc(e.name)}" placeholder="Mochi"></label><label>${t('species')}<input name="species" value="${esc(e.species)}" placeholder="Ball python"></label>
- <div class="two"><label>${t('group')}<select name="group">${Object.keys(EMO).map(g=>`<option value="${g}" ${e.group===g?'selected':''}>${EMO[g]} ${t('groups.'+g)}</option>`).join('')}</select></label><label>${t('interval')}<input name="interval" type="number" min="1" max="90" value="${e.interval}"></label></div>
+function sheet(html,onSubmit,after){const m=document.createElement('div');m.className='modal';m.innerHTML=`<form class="sheet glass">${html}<div class="hstack end"><button type="button" class="btn ghost" data-close>${t('cancel')}</button><button class="btn">${t('save')}</button></div></form>`;document.body.append(m);requestAnimationFrame(()=>m.classList.add('show'));
+ const close=()=>{m.classList.remove('show');setTimeout(()=>m.remove(),250)};m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)close()};m.querySelector('form').onsubmit=e=>{e.preventDefault();onSubmit(Object.fromEntries(new FormData(e.target)));close();save();render()};after?.(m,close)}
+function animalForm(a,preSp){const sp0=SPECIES.find(s=>s[0]===preSp);const e=a||{name:'',species:sp0?L(sp0[1],sp0[2]):'',sp:preSp||'',group:sp0?.[3]||'reptile',interval:sp0?.[4]||7,notes:'',feeder:''};
+ sheet(`<h3>${a?t('edit'):t('add')}</h3><label>${t('name')}<input name="name" required value="${esc(e.name)}" placeholder="Mochi"></label>
+ <label>${L('Loài (từ bách khoa)','Species (from guide)')}<select name="sp" id="spSel"><option value="">— ${L('Tự nhập','Custom')} —</option>${SPECIES.map(s=>`<option value="${s[0]}" ${e.sp===s[0]?'selected':''}>${EMO[s[3]]} ${esc(L(s[1],s[2]))}</option>`).join('')}</select></label>
+ <label>${t('species')}<input name="species" value="${esc(e.species)}" placeholder="Ball python"></label>
+ <div class="two"><label>${t('group')}<select name="group">${Object.keys(EMO).map(g=>`<option value="${g}" ${e.group===g?'selected':''}>${EMO[g]} ${t('groups.'+g)}</option>`).join('')}</select></label><label>${t('interval')}<input name="interval" type="number" min="1" max="120" value="${e.interval}"></label></div>
+ <label>${L('Mồi trong kho (tự trừ khi cho ăn)','Feeder from supplies (auto-deduct)')}<select name="feeder"><option value="">—</option>${S.inv.map(i=>`<option value="${i.id}" ${e.feeder===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}</select></label>
  <label>${t('notes')}<textarea name="notes" rows="2">${esc(e.notes)}</textarea></label>${a?`<button type="button" class="btn danger wide" id="delA">${t('del')}</button>`:''}`,
- v=>{v.interval=Math.max(1,+v.interval||7);if(a)Object.assign(a,v);else{const n={id:uid(),...v,created:Date.now()};S.animals.push(n);view={...view,id:n.id}}});
- document.getElementById('delA')?.addEventListener('click',()=>{if(confirm(t('confirmDel'))){S.animals=S.animals.filter(x=>x.id!==a.id);S.logs=S.logs.filter(l=>l.aid!==a.id);view.id=null;save();document.querySelector('.modal').remove();render()}})}
-function logForm(type){const iso=new Date().toISOString().slice(0,10);const needV={weight:t('grams'),feed:t('prey'),refuse:t('prey')}[type];
- sheet(`<h3>${EVI[type]} ${t('ev.'+type)}</h3>${needV?`<label>${needV}<input name="value" ${type==='weight'?'type="number" step="0.1" required':''} placeholder="${type==='weight'?'320':'Small mouse (f/t)'}"></label>`:''}<label>${t('date')}<input name="date" type="date" value="${iso}"></label><label>${t('notes')}<input name="note"></label>`,
- v=>addLog(view.id,type,v.value,v.note,v.date))}
-function addLog(aid,type,value='',note='',date){const at=date?+new Date(date+'T'+new Date().toTimeString().slice(0,8)):Date.now();S.logs.push({id:uid(),aid,type,value,note,at})}
-function demo(){const now=Date.now(),A=[['Mochi','Ball python','reptile',10],['Bơ','Leopard gecko','reptile',3],['Kiwi','Pacman frog','amphibian',5],['Nhện Đỏ','Brachypelma hamorii','invert',7],['Sóc Nâu','Cockatiel','bird',1],['Lam','Betta splendens','fish',1]];
- A.forEach(([name,species,group,interval],i)=>{const id=uid();S.animals.push({id,name,species,group,interval,notes:'',created:now});
-  for(let k=0;k<8;k++){S.logs.push({id:uid(),aid:id,type:k%4===3?'refuse':'feed',value:group==='reptile'?'Mouse':'',note:'',at:now-DAY*(interval*(k+1)-(i%3)+ (i===0?3:0))})}
-  for(let k=0;k<6;k++)S.logs.push({id:uid(),aid:id,type:'weight',value:String(Math.round([320,55,140,18,90,3][i]*(1-k*.04)*10)/10),note:'',at:now-DAY*14*k-DAY});
-  if(group!=='bird'&&group!=='fish')S.logs.push({id:uid(),aid:id,type:'shed',value:'',note:'',at:now-DAY*(12+i*4)})});save();render();toast('✨')}
+ v=>{v.interval=Math.max(1,+v.interval||7);if(a)Object.assign(a,v);else{const n={id:uid(),...v,created:Date.now()};S.animals.push(n);view={...view,id:n.id,sel:null}}},
+ (m,close)=>{const f=m.querySelector('form');f.sp.onchange=()=>{const s=SPECIES.find(x=>x[0]===f.sp.value);if(s){f.species.value=L(s[1],s[2]);f.group.value=s[3];f.interval.value=s[4]}};
+  m.querySelector('#delA')?.addEventListener('click',async()=>{if(confirm(t('confirmDel'))){S.animals=S.animals.filter(x=>x.id!==a.id);S.logs=S.logs.filter(l=>l.aid!==a.id);S.habitat=S.habitat.filter(h=>h.aid!==a.id);try{for(const p of await P.photosOf(a.id))await P.delPhoto(p.id)}catch{}view.id=null;save();close();render()}})})}
+function logForm(type,ids){const iso=ymd(Date.now());const needV={weight:t('grams'),feed:t('prey'),refuse:t('prey')}[type];
+ sheet(`<h3>${EVI[type]} ${t('ev.'+type)}</h3>${needV?`<label>${needV}<input name="value" ${type==='weight'?'type="number" step="0.1" min="0" required inputmode="decimal"':''} placeholder="${type==='weight'?'320':L('Chuột nhỏ (rã đông)','Small mouse (f/t)')}"></label>`:''}<div class="two"><label>${t('date')}<input name="date" type="date" value="${iso}" max="${iso}"></label><label>${L('Chi phí (tuỳ chọn)','Cost (optional)')}<input name="cost" type="number" min="0" step="1000" inputmode="numeric" placeholder="0"></label></div><label>${t('notes')}<input name="note"></label>`,
+ v=>(ids||[view.id]).forEach(id=>addLog(id,type,v.value,v.note,v.date,v.cost)))}
+function habForm(){const a=S.animals.find(x=>x.id===view.id),r=range(a);sheet(`<h3>🌡️ ${L('Môi trường','Habitat reading')}</h3><div class="two"><label>${L('Nhiệt độ °C','Temp °C')}<input name="temp" type="number" step="0.1" inputmode="decimal" placeholder="${r.tmax?(r.tmin+r.tmax)/2:28}"></label><label>${L('Độ ẩm %','Humidity %')}<input name="hum" type="number" step="1" min="0" max="100" inputmode="numeric" placeholder="${r.hmax?(r.hmin+r.hmax)/2:60}"></label></div>
+ <p class="muted">${L('Ngưỡng chuẩn (để trống = theo bách khoa)','Target range (blank = species default)')}</p><div class="two"><label>${L('Nhiệt min/max','Temp min/max')}<span class="pair"><input name="tmin" type="number" value="${a.tmin||''}" placeholder="${r.tmin||''}"><input name="tmax" type="number" value="${a.tmax||''}" placeholder="${r.tmax||''}"></span></label><label>${L('Ẩm min/max','Hum min/max')}<span class="pair"><input name="hmin" type="number" value="${a.hmin||''}" placeholder="${r.hmin||''}"><input name="hmax" type="number" value="${a.hmax||''}" placeholder="${r.hmax||''}"></span></label></div>`,
+ v=>{['tmin','tmax','hmin','hmax'].forEach(k=>a[k]=v[k]);if(v.temp!==''||v.hum!==''){S.habitat.push({id:uid(),aid:a.id,at:Date.now(),temp:v.temp,hum:v.hum});const x=habAlert(a);if(x)setTimeout(()=>toast('⚠️ '+x.m.join(' · ')),300)}})}
+function invForm(i){const e=i||{name:'',emoji:'🦗',qty:20,unit:L('con','pcs'),min:5,cost:''};sheet(`<h3>📦 ${i?t('edit'):L('Thêm mặt hàng','Add item')}</h3><div class="two"><label>${t('name')}<input name="name" required value="${esc(e.name)}" placeholder="${L('Dế','Crickets')}"></label><label>Emoji<input name="emoji" value="${esc(e.emoji)}" maxlength="4"></label></div>
+ <div class="two"><label>${L('Số lượng','Quantity')}<input name="qty" type="number" min="0" value="${e.qty}"></label><label>${L('Đơn vị','Unit')}<input name="unit" value="${esc(e.unit)}"></label></div><div class="two"><label>${L('Báo khi còn ≤','Alert when ≤')}<input name="min" type="number" min="0" value="${e.min}"></label><label>${L('Giá mua','Cost')}<input name="cost" type="number" min="0" value="${e.cost}"></label></div>${i?`<button type="button" class="btn danger wide" id="delI">${t('del')}</button>`:''}`,
+ v=>{v.qty=Math.max(0,+v.qty||0);v.min=Math.max(0,+v.min||0);if(i)Object.assign(i,v);else S.inv.push({id:uid(),...v})},(m,close)=>m.querySelector('#delI')?.addEventListener('click',()=>{S.inv=S.inv.filter(x=>x.id!==i.id);S.animals.forEach(a=>{if(a.feeder===i.id)a.feeder=''});save();close();render()}))}
+function addLog(aid,type,value='',note='',date,cost=''){const at=date&&date!==ymd(Date.now())?+new Date(date+'T12:00'):Date.now();S.logs.push({id:uid(),aid,type,value,note,at,cost});
+ if(type==='feed'){const a=S.animals.find(x=>x.id===aid),it=a&&S.inv.find(i=>i.id===a.feeder);if(it&&+it.qty>0){it.qty=+it.qty-1;if(+it.qty<=+it.min)setTimeout(()=>toast(`📦 ${it.name}: ${L('còn','left')} ${it.qty}`),900)}}}
 
-app.addEventListener('click',e=>{const el=e.target.closest('[data-tab],[data-open],[data-act],[data-quick],[data-log],[data-g],[data-lang],[data-dellog]');if(!el)return;const d=el.dataset;
+// share card
+async function shareCard(a){const c=document.createElement('canvas');c.width=1080;c.height=1350;const x=c.getContext('2d');const h=HUE[a.group]||150;
+ const g=x.createLinearGradient(0,0,1080,1350);g.addColorStop(0,`hsl(${h} 80% 86%)`);g.addColorStop(1,`hsl(${h+60} 85% 84%)`);x.fillStyle=g;x.fillRect(0,0,1080,1350);
+ [[200,200,420,`hsla(${h},90%,70%,.55)`],[900,1100,480,`hsla(${h+90},90%,75%,.5)`]].forEach(([cx,cy,r,col])=>{const rg=x.createRadialGradient(cx,cy,0,cx,cy,r);rg.addColorStop(0,col);rg.addColorStop(1,'transparent');x.fillStyle=rg;x.fillRect(0,0,1080,1350)});
+ const rr=(X,Y,W,H,R)=>{x.beginPath();x.roundRect(X,Y,W,H,R)};x.fillStyle='rgba(255,255,255,.55)';rr(80,300,920,900,64);x.fill();x.strokeStyle='rgba(255,255,255,.9)';x.lineWidth=3;x.stroke();
+ const cover=a.cover?await new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=a.cover}):null;
+ x.save();rr(390,180,300,300,90);x.clip();x.fillStyle=`hsl(${h} 85% 90%)`;x.fillRect(390,180,300,300);if(cover){const k=Math.max(300/cover.width,300/cover.height);x.drawImage(cover,540-cover.width*k/2,330-cover.height*k/2,cover.width*k,cover.height*k)}else{x.font='170px serif';x.textAlign='center';x.textBaseline='middle';x.fillText(EMO[a.group]||'🐾',540,340)}x.restore();
+ x.fillStyle='#0f2a2e';x.textAlign='center';x.textBaseline='alphabetic';x.font='700 96px Fraunces, serif';x.fillText(a.name,540,600);x.font='500 40px "Be Vietnam Pro", sans-serif';x.fillStyle='#4b6468';x.fillText(a.species||t('groups.'+a.group),540,665);
+ const s=status(a),w=last(a.id,['weight']),sh=last(a.id,['shed']),Ls=logsOf(a.id),f=Ls.filter(l=>l.type==='feed').length,r=Ls.filter(l=>l.type==='refuse').length;
+ const cells=[[w?w.value+' g':'–',t('weight')],[f+r?Math.round(f*100/(f+r))+'%':'–',t('acceptance')],[rel(s.f?.at),t('lastFed')],[rel(sh?.at),t('lastShed')]];
+ cells.forEach(([v,l],i)=>{const X=140+(i%2)*420,Y=730+Math.floor(i/2)*200;x.fillStyle='rgba(255,255,255,.7)';rr(X,Y,380,170,40);x.fill();x.fillStyle='#0f2a2e';x.textAlign='left';let fz=54;do{x.font=`800 ${fz}px "Be Vietnam Pro", sans-serif`;fz-=2}while(x.measureText(v).width>310&&fz>24);x.fillText(v,X+36,Y+82);x.font='500 30px "Be Vietnam Pro", sans-serif';x.fillStyle='#5b7277';x.fillText(l,X+36,Y+130)});
+ x.textAlign='center';x.fillStyle='#0f2a2e';x.font='700 40px "Be Vietnam Pro", sans-serif';x.fillText('Vivari',540,1280);
+ const blob=await new Promise(r=>c.toBlob(r,'image/png'));const file=new File([blob],`${a.name}-vivari.png`,{type:'image/png'});
+ if(navigator.canShare?.({files:[file]})){try{await navigator.share({files:[file],title:a.name});return}catch(e){if(e.name==='AbortError')return}}
+ const u=URL.createObjectURL(blob);Object.assign(document.createElement('a'),{href:u,download:file.name}).click();toast('🖼️ '+L('Đã lưu thẻ PNG','Card saved as PNG'))}
+
+// reminders
+async function swReg(){return'serviceWorker'in navigator?navigator.serviceWorker.getRegistration():null}
+async function notify(title,body){const r=await swReg();const o={body,icon:'icon-192.png',badge:'icon-192.png',tag:'vivari-due'};if(r?.showNotification)return r.showNotification(title,o);new Notification(title,o)}
+async function checkReminders(force){if(!S.notif.on||!('Notification'in window)||Notification.permission!=='granted')return;const k=ymd(Date.now());if(!force&&S.notif.last===k)return;
+ const due=S.animals.filter(a=>status(a).left<=0),al=S.animals.filter(habAlert),low=lowStock();if(!due.length&&!al.length&&!low.length&&!force)return;
+ const parts=[];if(due.length)parts.push(L('Đến hạn cho ăn: ','Due to feed: ')+due.map(a=>a.name).join(', '));if(al.length)parts.push('⚠️ '+al.map(a=>a.name).join(', '));if(low.length)parts.push('📦 '+low.map(i=>i.name).join(', '));
+ await notify('Vivari 🦎',parts.join('\n')||L('Mọi bé đều ổn!','All good!'));S.notif.last=k;save()}
+async function toggleNotif(){if(!('Notification'in window))return toast(L('Trình duyệt không hỗ trợ thông báo','Notifications not supported'));if(S.notif.on){S.notif.on=false;save();render();return}
+ const p=await Notification.requestPermission();if(p!=='granted')return toast(L('Bạn đã chặn thông báo','Notifications blocked'));S.notif={on:true,last:''};save();render();toast('🔔 '+L('Đã bật nhắc','Reminders on'));checkReminders()}
+
+
+async function exportAll(){let photos=[];try{photos=await Promise.all((await P.allPhotos()).map(async p=>({id:p.id,aid:p.aid,at:p.at,data:await P.blobToData(p.blob)})))}catch{}
+ const b=new Blob([JSON.stringify({app:'vivari',v:2,...S,photos})],{type:'application/json'});const u=URL.createObjectURL(b);Object.assign(document.createElement('a'),{href:u,download:`vivari-${ymd(Date.now())}.json`}).click()}
+async function importAll(file){const j=JSON.parse(await file.text());if(!Array.isArray(j.animals)||!Array.isArray(j.logs))throw 0;const {photos=[],app:_,v:__,...rest}=j;S={...blank(),...rest};save();try{await P.clearPhotos();for(const p of photos)await P.putPhoto({id:p.id,aid:p.aid,at:p.at,blob:await P.dataToBlob(p.data)})}catch{}render();toast('✅ '+t('imported'))}
+function demo(){const now=Date.now(),A=[['Mochi','Ball python','reptile',10,'ballpython'],['Bơ','Leopard gecko','reptile',3,'leogecko'],['Kiwi','Pacman frog','amphibian',5,'pacman'],['Nhện Đỏ','Brachypelma hamorii','invert',7,'tarantula'],['Sóc Nâu','Cockatiel','bird',1,'cockatiel'],['Lam','Betta splendens','fish',1,'betta']];
+ const inv=[{id:uid(),name:L('Chuột rã đông','F/T mice'),emoji:'🐭',qty:4,unit:L('con','pcs'),min:5,cost:120000},{id:uid(),name:L('Dế','Crickets'),emoji:'🦗',qty:60,unit:L('con','pcs'),min:20,cost:50000},{id:uid(),name:L('Hạt vẹt','Bird seed'),emoji:'🌾',qty:2,unit:'kg',min:1,cost:90000}];S.inv.push(...inv);
+ A.forEach(([name,species,group,interval,sp],i)=>{const id=uid();S.animals.push({id,name,species,group,interval,sp,notes:'',created:now,feeder:i===0?inv[0].id:i===1||i===3?inv[1].id:i===4?inv[2].id:''});
+  for(let k=0;k<8;k++)S.logs.push({id:uid(),aid:id,type:k%4===3?'refuse':'feed',value:group==='reptile'?'Mouse':'',note:'',cost:'',at:now-DAY*(interval*(k+1)-(i%3)+(i===0?3:0))});
+  for(let k=0;k<6;k++)S.logs.push({id:uid(),aid:id,type:'weight',value:String(Math.round([320,55,140,18,90,3][i]*(1-k*.04)*10)/10),note:'',cost:'',at:now-DAY*14*k-DAY});
+  if(group!=='bird'&&group!=='fish')[0,1,2].forEach(k=>S.logs.push({id:uid(),aid:id,type:'shed',value:'',note:'',cost:'',at:now-DAY*(12+i*4+k*(30+i*3))}));
+  if(i===0)S.logs.push({id:uid(),aid:id,type:'vet',value:'',note:L('Khám tổng quát','Check-up'),cost:350000,at:now-DAY*20});
+  if(i===4)S.logs.push({id:uid(),aid:id,type:'vet',value:'',note:L('Cắt móng','Nail trim'),cost:150000,at:now-DAY*5});
+  const s=SPECIES.find(x=>x[0]===sp);for(let k=0;k<7;k++)S.habitat.push({id:uid(),aid:id,at:now-DAY*k*2-36e5,temp:String(+((s[5]+s[6])/2+Math.sin(k+i)*2+(i===2&&k===0?6:0)).toFixed(1)),hum:s[8]?String(Math.round((s[7]+s[8])/2+Math.cos(k)*5)):''})});save();render();toast('✨')}
+
+async function onClick(e){const el=e.target.closest('[data-tab],[data-open],[data-act],[data-quick],[data-log],[data-g],[data-set],[data-dellog],[data-pick],[data-bulk],[data-day],[data-mon],[data-inv],[data-editinv],[data-adopt],[data-delphoto],[data-cover]');if(!el)return;const d=el.dataset;
  if(d.quick){e.stopPropagation();addLog(d.id,d.quick);save();render();toast(EVI[d.quick]+' '+t('ev.'+d.quick));return}
  if(d.dellog){S.logs=S.logs.filter(l=>l.id!==d.dellog);save();render();return}
- if(d.tab){view={...view,tab:d.tab,id:null}}else if(d.open){view.id=d.open}else if(d.g){view.g=d.g}else if(d.lang){S.lang=d.lang;save()}else if(d.log){return logForm(d.log)}
- else if(d.act){const a=d.act;if(a==='add')return animalForm();if(a==='edit')return animalForm(S.animals.find(x=>x.id===view.id));if(a==='back')view.id=null;if(a==='demo')return demo();
-  if(a==='export'){const b=new Blob([JSON.stringify({app:'vivari',v:1,...S},null,2)],{type:'application/json'});const u=URL.createObjectURL(b);Object.assign(document.createElement('a'),{href:u,download:`vivari-${new Date().toISOString().slice(0,10)}.json`}).click();return}
-  if(a==='wipe'){if(confirm(t('confirmDel'))){S={lang:S.lang,animals:[],logs:[]};save()}}}
- scrollTo({top:0,behavior:'smooth'});render()});
-app.addEventListener('input',e=>{if(e.target.id==='q'){view.q=e.target.value;const p=e.target.selectionStart;render();const q=document.getElementById('q');q.focus();q.setSelectionRange(p,p)}});
-app.addEventListener('change',async e=>{if(e.target.id==='imp'){try{const j=JSON.parse(await e.target.files[0].text());if(!Array.isArray(j.animals)||!Array.isArray(j.logs))throw 0;S={lang:j.lang||S.lang,animals:j.animals,logs:j.logs};save();render();toast('✅ '+t('imported'))}catch{toast('⚠️ JSON?')}}});
-render();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js');
+ if(d.delphoto){if(confirm(t('confirmDel'))){await P.delPhoto(d.delphoto);loadPhotos(view.id)}return}
+ if(d.cover){const p=(await P.photosOf(view.id)).find(x=>x.id===d.cover);const bmp=await createImageBitmap(p.blob);const c=document.createElement('canvas');c.width=c.height=160;const k=Math.max(160/bmp.width,160/bmp.height);c.getContext('2d').drawImage(bmp,80-bmp.width*k/2,80-bmp.height*k/2,bmp.width*k,bmp.height*k);S.animals.find(a=>a.id===view.id).cover=c.toDataURL('image/jpeg',.8);save();render();return}
+ if(d.inv){const i=S.inv.find(x=>x.id===d.id);i.qty=Math.max(0,+i.qty+ +d.inv);save();render();return}
+ if(d.editinv)return invForm(S.inv.find(x=>x.id===d.editinv));
+ if(d.pick){const s=view.sel;s.includes(d.pick)?s.splice(s.indexOf(d.pick),1):s.push(d.pick);render();return}
+ if(d.bulk){const ids=[...view.sel];if(d.bulk==='feed'){ids.forEach(id=>addLog(id,'feed'));view.sel=null;save();render();toast(`🍽️ ×${ids.length}`)}else{view.sel=null;render();logForm(d.bulk,ids)}return}
+ if(d.adopt){view.tab='animals';render();return animalForm(null,d.adopt)}
+ if(d.day){view.day=view.day===d.day?null:d.day;render();return}
+ if(d.mon){const n=new Date();const [Y,M]=view.cal||[n.getFullYear(),n.getMonth()];const x=new Date(Y,M+ +d.mon,1);view.cal=[x.getFullYear(),x.getMonth()];view.day=null;render();return}
+ if(d.tab){view={...view,tab:d.tab,id:null,sel:null,g:d.tab===view.tab?view.g:'all'}}else if(d.open){view.id=d.open}else if(d.g){view.g=d.g;render();return}else if(d.set){S[d.set]=d.v;save()}else if(d.log){return logForm(d.log)}
+ else if(d.act){const a=d.act;if(a==='add')return animalForm();if(a==='edit')return animalForm(S.animals.find(x=>x.id===view.id));if(a==='back')view.id=null;if(a==='demo')return demo();if(a==='hab')return habForm();if(a==='addinv')return invForm();
+  if(a==='share')return shareCard(S.animals.find(x=>x.id===view.id));if(a==='notif')return toggleNotif();if(a==='testnotif')return checkReminders(true);
+  if(a==='selmode'){view.sel=view.sel?null:[];render();return}
+  if(a==='feedall'){const ids=S.animals.filter(x=>status(x).left<=0).map(x=>x.id);ids.forEach(id=>addLog(id,'feed'));save();render();toast(`🍽️ ×${ids.length}`);return}
+  if(a==='export')return exportAll();
+  if(a==='wipe'){if(confirm(t('confirmDel'))){S={...blank(),lang:S.lang,theme:S.theme};save();try{await P.clearPhotos()}catch{}}}}
+ scrollTo({top:0,behavior:'smooth'});render()}
+app.addEventListener('click',onClick);
+const live=(id,key)=>e=>{if(e.target.id===id){view[key]=e.target.value;const p=e.target.selectionStart;render();const q=document.getElementById(id);q.focus();q.setSelectionRange(p,p)}};
+app.addEventListener('input',e=>{live('q','q')(e);live('wq','wq')(e)});
+app.addEventListener('change',async e=>{if(e.target.id==='imp'){try{await importAll(e.target.files[0])}catch{toast('⚠️ '+L('File JSON không hợp lệ','Invalid JSON file'))}e.target.value=''}
+ if(e.target.id==='photoIn'){const aid=view.id;let n=0;for(const f of e.target.files){try{const b=await P.compress(f);await P.putPhoto({id:uid(),aid,at:Date.now(),blob:b});n++}catch{}}e.target.value='';if(n){const a=S.animals.find(x=>x.id===aid);if(a&&!a.cover){const ps=await P.photosOf(aid);if(ps[0]){const bmp=await createImageBitmap(ps[0].blob);const c=document.createElement('canvas');c.width=c.height=160;const k=Math.max(160/bmp.width,160/bmp.height);c.getContext('2d').drawImage(bmp,80-bmp.width*k/2,80-bmp.height*k/2,bmp.width*k,bmp.height*k);a.cover=c.toDataURL('image/jpeg',.8);save()}}render();toast(`📷 +${n}`)}}});
+render();
+if('serviceWorker'in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))navigator.serviceWorker.register('sw.js').then(()=>checkReminders());
+setInterval(checkReminders,30*6e4);document.addEventListener('visibilitychange',()=>{if(!document.hidden){render();checkReminders()}});
