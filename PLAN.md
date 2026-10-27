@@ -18,6 +18,7 @@ Người nuôi bò sát/exotic nhiều con, breeder nhỏ, trạm cứu hộ, ng
 - Màn "Hôm nay": ai đến hạn/quá hạn cho ăn, ghi nhanh 1 chạm
 - Biểu đồ cân nặng, thống kê tỉ lệ ăn
 - Xuất/nhập JSON, PWA cài lên màn hình, VI/EN
+- v3: bách khoa 196 loài crawl từ Wikipedia vi/en + Wikidata + Commons (`npm run crawl`), theo dõi sinh sản/ổ trứng
 - v2: bách khoa 24 loài, nhắc thông báo, lịch, thống kê, nhật ký ảnh (IndexedDB), nhiệt độ/độ ẩm + cảnh báo, kho mồi, chi phí, ghi nhanh nhiều con, thẻ chia sẻ PNG, giao diện tối
 
 ## Kiếm tiền
